@@ -4,7 +4,6 @@ const cors = require('cors');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const Joi = require('joi');
-const WebSocket = require('ws');
 require('dotenv').config();
 
 const app = express();
@@ -47,7 +46,7 @@ const tripSchema = new mongoose.Schema({
   departureDate: String, // Format: DD-MMM-YYYY
   departureTime: String,
   duration: Number, // in minutes
-  price: Number, // in thousands VND (e.g., 250 for 250,000 VND)
+  price: Number, // in thousands VND
   busType: String, // e.g., Sleeper, Limousine, Standard, Minivan
   operator: String,
   operatorType: String, // e.g., Small, Medium, Large
@@ -91,9 +90,9 @@ const loginSchema = Joi.object({
 });
 
 const searchTripSchema = Joi.object({
-  source: Joi.string().allow('', null), // Không bắt buộc
-  destination: Joi.string().required(), // Bắt buộc
-  date: Joi.string().allow('', null), // Không sử dụng
+  source: Joi.string().allow('', null),
+  destination: Joi.string().required(),
+  date: Joi.string().allow('', null),
   passengers: Joi.number().integer().min(1).default(1),
   maxBudget: Joi.number().min(0).allow(null),
   preferredBusType: Joi.string().allow(null),
@@ -109,7 +108,6 @@ const bookingSchemaValidator = Joi.object({
 
 // Environment Variables
 const JWT_SECRET = process.env.JWT_SECRET || 'my_very_secure_secret_2025';
-const PORT = process.env.PORT || 3000;
 const MONGO_URI = process.env.MONGO_URI || 'mongodb+srv://vanderspeare:009.00@cluster0.3ido8bh.mongodb.net/busData?retryWrites=true&w=majority';
 
 // Middleware to verify token
@@ -259,21 +257,18 @@ app.post('/api/trips/search', async (req, res) => {
 
     const { destination, maxResults } = req.body;
 
-    // Validate required field
     if (!destination) {
       logger.warning('Destination is required in trip search');
       return res.status(400).json({ success: false, message: 'Vui lòng cung cấp địa điểm đến (destination).' });
     }
 
-    // Use current date as the default search date
     const currentDate = new Date();
     const formattedDate = currentDate.toLocaleDateString('en-GB', {
       day: '2-digit',
       month: 'short',
       year: 'numeric',
-    }).replace(/ /g, '-'); // Format: DD-MMM-YYYY, e.g., "21-May-2025"
+    }).replace(/ /g, '-');
 
-    // Build MongoDB query with only destination and current date
     let query = { $and: [] };
     query.$and.push({ destination: new RegExp(destination, 'i') });
     query.$and.push({ departureDate: formattedDate });
@@ -309,9 +304,6 @@ app.post('/api/trips/search', async (req, res) => {
       recommendation: trip.recommendation || 'Phù hợp với tiêu chí tìm kiếm',
     }));
 
-    logger.info(`Found ${recommendations.length} trips`);
-
-    // Fallback query if no results (only destination)
     if (!recommendations.length) {
       let fallbackQuery = { $and: [] };
       fallbackQuery.$and.push({ destination: new RegExp(destination, 'i') });
@@ -345,7 +337,6 @@ app.post('/api/trips/search', async (req, res) => {
         available_seats: Number(trip.availableSeats || 30),
         recommendation: 'Kết quả dự phòng dựa trên tiêu chí tối thiểu.',
       }));
-      logger.info(`Fallback found ${recommendations.length} trips`);
     }
 
     if (!recommendations.length) {
@@ -372,21 +363,18 @@ app.get('/api/trips/search', async (req, res) => {
 
     const { destination, maxResults } = req.query;
 
-    // Validate required field
     if (!destination) {
       logger.warning('Destination is required in trip search (GET)');
       return res.status(400).json({ success: false, message: 'Vui lòng cung cấp địa điểm đến (destination).' });
     }
 
-    // Use current date as the default search date
     const currentDate = new Date();
     const formattedDate = currentDate.toLocaleDateString('en-GB', {
       day: '2-digit',
       month: 'short',
       year: 'numeric',
-    }).replace(/ /g, '-'); // Format: DD-MMM-YYYY, e.g., "21-May-2025"
+    }).replace(/ /g, '-');
 
-    // Build MongoDB query with only destination and current date
     let query = { $and: [] };
     query.$and.push({ destination: new RegExp(destination, 'i') });
     query.$and.push({ departureDate: formattedDate });
@@ -422,9 +410,6 @@ app.get('/api/trips/search', async (req, res) => {
       recommendation: trip.recommendation || 'Phù hợp với tiêu chí tìm kiếm',
     }));
 
-    logger.info(`Found ${recommendations.length} trips (GET)`);
-
-    // Fallback query if no results (only destination)
     if (!recommendations.length) {
       let fallbackQuery = { $and: [] };
       fallbackQuery.$and.push({ destination: new RegExp(destination, 'i') });
@@ -458,7 +443,6 @@ app.get('/api/trips/search', async (req, res) => {
         available_seats: Number(trip.availableSeats || 30),
         recommendation: 'Kết quả dự phòng dựa trên tiêu chí tối thiểu.',
       }));
-      logger.info(`Fallback found ${recommendations.length} trips (GET)`);
     }
 
     if (!recommendations.length) {
@@ -698,93 +682,10 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'healthy' });
 });
 
-// WebSocket Server
-const server = app.listen(PORT, () => {
-  logger.info(`Server running on port ${PORT}`);
-});
+// Export the app for Vercel
+module.exports = app;
 
-const wss = new WebSocket.Server({ server });
-
-wss.on('connection', (ws) => {
-  logger.info('WebSocket connection established');
-  ws.on('message', async (data) => {
-    try {
-      let requestData;
-      try {
-        requestData = JSON.parse(data);
-      } catch (err) {
-        logger.warning('Invalid JSON received, using default query');
-        requestData = {
-          destination: 'Vũng Tàu',
-          maxResults: 5,
-        };
-      }
-
-      const { destination, maxResults = 5 } = requestData;
-
-      // Validate required field
-      if (!destination) {
-        logger.warning('Destination is required in WebSocket request');
-        ws.send(JSON.stringify({ error: 'Vui lòng cung cấp địa điểm đến (destination).' }));
-        return;
-      }
-
-      // Use current date as the default search date
-      const currentDate = new Date();
-      const formattedDate = currentDate.toLocaleDateString('en-GB', {
-        day: '2-digit',
-        month: 'short',
-        year: 'numeric',
-      }).replace(/ /g, '-'); // Format: DD-MMM-YYYY, e.g., "21-May-2025"
-
-      // Build MongoDB query with only destination and current date
-      const query = { $and: [] };
-      query.$and.push({ destination: new RegExp(destination, 'i') });
-      query.$and.push({ departureDate: formattedDate });
-
-      const trips = await Trip.find(query)
-        .sort({ rankScore: -1, price: 1 })
-        .limit(parseInt(maxResults))
-        .lean();
-
-      const tripList = trips.map(trip => ({
-        id: trip._id.toString(),
-        source: trip.startingPoint || 'N/A',
-        destination: trip.destination || 'N/A',
-        source_station_id: trip.sourceStationId || '',
-        destination_station_id: trip.destinationStationId || '',
-        source_station: trip.sourceStation?.name || trip.startingPoint || 'N/A',
-        destination_station: trip.destinationStation?.name || trip.destination || 'N/A',
-        source_station_address: trip.sourceStation?.address || '',
-        destination_station_address: trip.destinationStation?.address || '',
-        departure_time: trip.departureTime || 'N/A',
-        departure_date: trip.departureDate || 'N/A',
-        price: Number(trip.price || 0),
-        duration: Number(trip.duration || 0),
-        bus_type: trip.busType || 'Standard',
-        operator: trip.operator || 'N/A',
-        operator_type: trip.operatorType || 'Small',
-        amenities: trip.amenities || [],
-        rating: Number(trip.rating || 0),
-        rank_score: Number(trip.rankScore || trip.rating || 0),
-        available_seats: Number(trip.availableSeats || 30),
-        recommendation: trip.recommendation || 'Cập nhật qua WebSocket',
-      }));
-
-      logger.info(`WebSocket sending ${tripList.length} trips for destination: ${destination}`);
-      ws.send(JSON.stringify({ success: true, trips: tripList }));
-    } catch (error) {
-      logger.error(`WebSocket error: ${error}`);
-      ws.send(JSON.stringify({ success: false, error: `Lỗi WebSocket: ${error.message}` }));
-    }
-  });
-
-  ws.on('close', () => {
-    logger.info('WebSocket connection closed');
-  });
-});
-
-// MongoDB Connection
+// MongoDB Connection (handled by Vercel at runtime)
 mongoose.connect(MONGO_URI, {
   useNewUrlParser: true,
   useUnifiedTopology: true,
